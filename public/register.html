@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anmeldung – Mixed Turnier</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">🏐 Mixed Turnier</span>
+</div>
+
+<div class="container" style="max-width:480px">
+
+  <!-- Already registered -->
+  <div id="view-registered" style="display:none" class="mt-4">
+    <div class="alert alert-info">
+      Du bist bereits angemeldet als <strong id="already-name"></strong>.
+    </div>
+    <div class="flex mt-3" style="gap:0.75rem; flex-wrap:wrap">
+      <a href="/player" class="btn btn-primary">Mein Spielplan</a>
+      <button class="btn btn-secondary" id="btn-re-register">Neu anmelden</button>
+    </div>
+  </div>
+
+  <!-- Registration form -->
+  <div id="view-form" style="display:none">
+    <h1 class="mt-3">Anmeldung</h1>
+    <p class="mt-1" style="color:var(--muted)">Meld dich für das Mixed Turnier an.</p>
+
+    <form id="reg-form" class="mt-3">
+      <div class="form-group">
+        <label for="name">Dein Name</label>
+        <input type="text" id="name" name="name" placeholder="Vorname Nachname" required autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label for="club_team">Dein Verein / Team</label>
+        <select id="club_team" name="club_team" required>
+          <option value="">– Verein wählen –</option>
+        </select>
+      </div>
+      <div id="form-error" class="alert alert-error mt-2" style="display:none"></div>
+      <button type="submit" class="btn btn-primary mt-2" id="btn-submit" style="width:100%">
+        Anmelden
+      </button>
+    </form>
+  </div>
+
+  <!-- Success -->
+  <div id="view-success" style="display:none" class="center mt-4">
+    <div class="alert alert-success">
+      Erfolgreich angemeldet!
+    </div>
+    <p class="mt-2">Willkommen, <strong id="success-name"></strong>!</p>
+    <a href="/player" class="btn btn-primary mt-3" style="width:100%">Zum Spielplan</a>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+const TOKEN_KEY = 'tournament_token';
+const NAME_KEY  = 'tournament_name';
+
+async function init() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    // Verify token is still valid
+    try {
+      const res = await fetch('/api/player/' + token);
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('already-name').textContent = data.player.name;
+        show('registered');
+        return;
+      }
+    } catch {}
+    // Token invalid — clear it
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(NAME_KEY);
+  }
+  await loadTeams();
+  show('form');
+}
+
+async function loadTeams() {
+  const res = await fetch('/api/teams');
+  const data = await res.json();
+  const sel = document.getElementById('club_team');
+  for (const t of data.teams) {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    sel.appendChild(opt);
+  }
+}
+
+function show(view) {
+  ['registered','form','success'].forEach(v => {
+    document.getElementById('view-' + v).style.display = v === view ? '' : 'none';
+  });
+}
+
+document.getElementById('reg-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = document.getElementById('btn-submit');
+  const errEl = document.getElementById('form-error');
+  btn.disabled = true;
+  btn.textContent = 'Wird angemeldet...';
+  errEl.style.display = 'none';
+
+  const name = document.getElementById('name').value.trim();
+  const clubTeam = document.getElementById('club_team').value;
+
+  try {
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, clubTeam }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || 'Fehler bei der Anmeldung.';
+      errEl.style.display = '';
+      btn.disabled = false;
+      btn.textContent = 'Anmelden';
+      return;
+    }
+
+    localStorage.setItem(TOKEN_KEY, data.token);
+    localStorage.setItem(NAME_KEY, data.player.name);
+    document.getElementById('success-name').textContent = data.player.name;
+    show('success');
+  } catch (err) {
+    errEl.textContent = 'Verbindungsfehler: ' + err.message;
+    errEl.style.display = '';
+    btn.disabled = false;
+    btn.textContent = 'Anmelden';
+  }
+});
+
+document.getElementById('btn-re-register').addEventListener('click', async () => {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    await fetch('/api/player/' + token, { method: 'DELETE' }).catch(() => {});
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(NAME_KEY);
+  }
+  await loadTeams();
+  show('form');
+});
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+init();
+</script>
+</body>
+</html>

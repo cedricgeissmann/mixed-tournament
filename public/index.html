@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mixed Turnier – Spielplan</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">🏐 Mixed Turnier</span>
+  <div class="flex gap-sm">
+    <span id="status-badge" class="badge badge-yellow">Warten...</span>
+    <a href="/admin" class="btn btn-secondary btn-sm">Admin</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Waiting state -->
+  <div id="view-waiting" class="center mt-4" style="display:none">
+    <div class="qr-box mt-2">
+      <img id="qr-register" src="/qr?path=/register" alt="QR Code Anmeldung" width="200" height="200">
+    </div>
+    <h2 class="mt-3">Turnier startet bald</h2>
+    <p class="mt-1" style="color:var(--muted)">Scan den QR-Code zum Anmelden</p>
+    <p class="mt-1" style="color:var(--muted); font-size:0.9rem">
+      Oder öffne: <strong id="register-url"></strong>
+    </p>
+    <div id="waiting-players" class="mt-3"></div>
+  </div>
+
+  <!-- Active round -->
+  <div id="view-active" style="display:none">
+    <div class="flex mt-3" style="justify-content:space-between; flex-wrap:wrap; gap:0.5rem">
+      <h2>Runde <span id="round-num">–</span></h2>
+      <div class="flex gap-sm">
+        <button class="btn btn-secondary btn-sm" id="btn-refresh" onclick="loadRound()">
+          Aktualisieren
+        </button>
+        <span id="next-refresh" style="color:var(--muted); font-size:0.85rem; align-self:center"></span>
+      </div>
+    </div>
+
+    <div id="courts-grid" class="court-grid mt-3"></div>
+
+    <div id="break-section" class="card mt-3" style="display:none">
+      <h3 style="margin-bottom:0.75rem">Pause diese Runde</h3>
+      <div id="break-list" class="break-list"></div>
+    </div>
+  </div>
+
+  <!-- Finished state -->
+  <div id="view-finished" class="center mt-4" style="display:none">
+    <h2>Turnier beendet</h2>
+    <p class="mt-1" style="color:var(--muted)">Danke fürs Mitspielen!</p>
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+const POLL_MS = 30000;
+let pollTimer = null;
+let pollCountdown = null;
+let secondsLeft = 0;
+
+async function loadRound() {
+  try {
+    const [roundRes, serverRes] = await Promise.all([
+      fetch('/api/round/current'),
+      fetch('/api/server-info'),
+    ]);
+    const data = await roundRes.json();
+    const server = await serverRes.json();
+
+    document.getElementById('register-url').textContent = server.baseUrl + '/register';
+
+    renderState(data);
+    resetCountdown();
+  } catch (err) {
+    showToast('Fehler beim Laden: ' + err.message);
+  }
+}
+
+function renderState(data) {
+  const { tournamentStatus, currentRound, round } = data;
+
+  document.getElementById('view-waiting').style.display  = 'none';
+  document.getElementById('view-active').style.display   = 'none';
+  document.getElementById('view-finished').style.display = 'none';
+
+  const badge = document.getElementById('status-badge');
+
+  if (tournamentStatus === 'waiting') {
+    badge.textContent = 'Warten';
+    badge.className = 'badge badge-yellow';
+    document.getElementById('view-waiting').style.display = 'block';
+    loadWaitingPlayers();
+  } else if (tournamentStatus === 'finished') {
+    badge.textContent = 'Beendet';
+    badge.className = 'badge badge-red';
+    document.getElementById('view-finished').style.display = 'block';
+  } else {
+    badge.textContent = 'Runde ' + currentRound;
+    badge.className = 'badge badge-green';
+    document.getElementById('view-active').style.display = 'block';
+    renderRound(round);
+  }
+}
+
+async function loadWaitingPlayers() {
+  try {
+    const res = await fetch('/admin/api/players', { headers: { 'x-admin-password': '' } });
+    // Public-ish: show count without sensitive data
+    // We'll just load via the state endpoint instead
+  } catch {}
+}
+
+function renderRound(round) {
+  if (!round) return;
+
+  document.getElementById('round-num').textContent = round.roundNum;
+
+  const grid = document.getElementById('courts-grid');
+  grid.innerHTML = round.courts.map(court => `
+    <div class="court-card">
+      <div class="court-header">Feld ${court.courtNum}</div>
+      <div class="court-body">
+        <div class="team-block">
+          <h4>Team ${court.teams[0]?.teamNum ?? ''}</h4>
+          ${(court.teams[0]?.players ?? []).map(p => `
+            <div class="player-name">${esc(p.name)}</div>
+          `).join('')}
+        </div>
+        <div class="vs-divider">VS</div>
+        <div class="team-block team-right">
+          <h4>Team ${court.teams[1]?.teamNum ?? ''}</h4>
+          ${(court.teams[1]?.players ?? []).map(p => `
+            <div class="player-name">${esc(p.name)}</div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  const breakSection = document.getElementById('break-section');
+  const breakList = document.getElementById('break-list');
+  if (round.breaking && round.breaking.length > 0) {
+    breakSection.style.display = '';
+    breakList.innerHTML = round.breaking.map(p =>
+      `<span class="break-chip">${esc(p.name)}${p.voluntary ? ' (freiwillig)' : ''}</span>`
+    ).join('');
+  } else {
+    breakSection.style.display = 'none';
+  }
+}
+
+function resetCountdown() {
+  clearInterval(pollCountdown);
+  secondsLeft = POLL_MS / 1000;
+  updateCountdownLabel();
+  pollCountdown = setInterval(() => {
+    secondsLeft--;
+    updateCountdownLabel();
+    if (secondsLeft <= 0) {
+      clearInterval(pollCountdown);
+      loadRound();
+    }
+  }, 1000);
+}
+
+function updateCountdownLabel() {
+  const el = document.getElementById('next-refresh');
+  if (el) el.textContent = `Aktualisierung in ${secondsLeft}s`;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// Initial load
+loadRound();
+</script>
+</body>
+</html>

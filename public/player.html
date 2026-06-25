@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mein Spielplan – Mixed Turnier</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">🏐 Mixed Turnier</span>
+  <span id="player-name-badge" style="color:var(--muted); font-size:0.9rem"></span>
+</div>
+
+<div class="container" style="max-width:480px">
+
+  <!-- Not registered -->
+  <div id="view-notoken" style="display:none" class="center mt-4">
+    <p style="color:var(--muted)">Du bist nicht angemeldet.</p>
+    <a href="/register" class="btn btn-primary mt-3">Jetzt anmelden</a>
+  </div>
+
+  <!-- Loading -->
+  <div id="view-loading" class="center mt-4">
+    <div class="spinner"></div>
+    <p class="mt-2" style="color:var(--muted)">Lade...</p>
+  </div>
+
+  <!-- Player view -->
+  <div id="view-player" style="display:none">
+
+    <div id="assignment-box" class="assignment-box waiting mt-4">
+      <div class="sub-label" id="assignment-label">Warte auf Turnierstart...</div>
+      <div class="big-label" id="assignment-main"></div>
+      <div id="assignment-detail" style="color:var(--muted); font-size:0.9rem; margin-top:0.25rem"></div>
+    </div>
+
+    <!-- Teammates (shown when playing) -->
+    <div id="teammates-section" class="card mt-3" style="display:none">
+      <h3 style="margin-bottom:0.5rem">Dein Team</h3>
+      <div id="teammates-list"></div>
+    </div>
+
+    <!-- Break request -->
+    <div id="break-section" class="card mt-3" style="display:none">
+      <h3>Nächste Runde</h3>
+      <p class="mt-1" style="color:var(--muted); font-size:0.9rem">
+        Du kannst eine Pause für die nächste Runde anmelden (vor Rundenstart).
+      </p>
+      <div class="flex mt-2" style="gap:0.5rem; flex-wrap:wrap">
+        <button class="btn btn-warn btn-sm" id="btn-break-request">Pause anfragen</button>
+        <button class="btn btn-secondary btn-sm" id="btn-break-cancel" style="display:none">Pause abbrechen</button>
+      </div>
+      <div id="break-status" class="mt-2" style="font-size:0.88rem; color:var(--muted)"></div>
+    </div>
+
+    <!-- Actions -->
+    <div class="mt-3 flex flex-wrap gap-sm">
+      <button class="btn btn-secondary btn-sm" id="btn-refresh" onclick="loadPlayer()">
+        Aktualisieren
+      </button>
+      <span id="next-refresh" style="color:var(--muted); font-size:0.85rem; align-self:center"></span>
+    </div>
+
+    <div class="mt-4" style="border-top:1px solid var(--border); padding-top:1rem">
+      <button class="btn btn-danger btn-sm" id="btn-leave">Turnier verlassen</button>
+    </div>
+
+  </div>
+
+</div>
+
+<div id="toast"></div>
+
+<script>
+const TOKEN_KEY = 'tournament_token';
+const POLL_MS = 30000;
+let pollCountdown = null;
+let secondsLeft = 0;
+let currentToken = null;
+
+async function init() {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    show('notoken');
+    return;
+  }
+  currentToken = token;
+  show('loading');
+  await loadPlayer();
+}
+
+async function loadPlayer() {
+  if (!currentToken) return;
+  try {
+    const res = await fetch('/api/player/' + currentToken);
+    if (res.status === 404 || res.status === 410) {
+      localStorage.removeItem(TOKEN_KEY);
+      show('notoken');
+      return;
+    }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    renderPlayer(data);
+    show('player');
+    resetCountdown();
+  } catch (err) {
+    showToast('Fehler: ' + err.message);
+    show('player');
+  }
+}
+
+function renderPlayer(data) {
+  const { player, tournamentStatus, currentRound, assignment, hasBreakRequest, totalBreaks } = data;
+
+  document.getElementById('player-name-badge').textContent = player.name;
+
+  const box = document.getElementById('assignment-box');
+  const labelEl = document.getElementById('assignment-label');
+  const mainEl = document.getElementById('assignment-main');
+  const detailEl = document.getElementById('assignment-detail');
+  const teammatesSection = document.getElementById('teammates-section');
+  const breakSection = document.getElementById('break-section');
+
+  box.className = 'assignment-box waiting mt-4';
+  mainEl.textContent = '';
+  detailEl.textContent = '';
+  teammatesSection.style.display = 'none';
+  breakSection.style.display = 'none';
+
+  if (player.paused) {
+    box.className = 'assignment-box break mt-4';
+    labelEl.textContent = 'Pausiert';
+    mainEl.textContent = 'Pause';
+    detailEl.textContent = 'Du wurdest vom Admin pausiert und nimmst an der nächsten Runde nicht teil.';
+    return;
+  }
+
+  if (tournamentStatus === 'waiting') {
+    labelEl.textContent = 'Turnier startet bald';
+    mainEl.textContent = '⏳';
+  } else if (tournamentStatus === 'finished') {
+    labelEl.textContent = 'Turnier beendet';
+    mainEl.textContent = '🏆';
+    detailEl.textContent = 'Danke fürs Mitspielen!';
+  } else if (assignment.status === 'playing') {
+    box.className = 'assignment-box playing mt-4';
+    labelEl.textContent = `Runde ${assignment.roundNum}`;
+    mainEl.textContent = `Feld ${assignment.courtNum}`;
+    detailEl.textContent = `Team ${assignment.teamNum}`;
+    breakSection.style.display = '';
+    loadTeammates(currentRound, assignment.courtNum, assignment.teamNum);
+  } else if (assignment.status === 'break') {
+    box.className = 'assignment-box break mt-4';
+    labelEl.textContent = `Runde ${assignment.roundNum}`;
+    mainEl.textContent = 'Pause';
+    detailEl.textContent = assignment.voluntary ? 'Freiwillige Pause' : 'Pflichtpause';
+    breakSection.style.display = '';
+  } else {
+    labelEl.textContent = 'Runde ' + (assignment.roundNum || currentRound);
+    mainEl.textContent = '⏳';
+    detailEl.textContent = 'Du wurdest dieser Runde noch nicht zugewiesen.';
+    breakSection.style.display = '';
+  }
+
+  // Break request controls
+  const btnRequest = document.getElementById('btn-break-request');
+  const btnCancel = document.getElementById('btn-break-cancel');
+  const breakStatusEl = document.getElementById('break-status');
+
+  if (hasBreakRequest) {
+    btnRequest.style.display = 'none';
+    btnCancel.style.display = '';
+    breakStatusEl.textContent = 'Pause für nächste Runde angefragt.';
+  } else {
+    btnRequest.style.display = '';
+    btnCancel.style.display = 'none';
+    breakStatusEl.textContent = `Bisherige Pausen: ${totalBreaks}`;
+  }
+}
+
+async function loadTeammates(roundNum, courtNum, teamNum) {
+  try {
+    const res = await fetch('/api/round/current');
+    const data = await res.json();
+    if (!data.round) return;
+
+    const court = data.round.courts.find(c => c.courtNum === courtNum);
+    if (!court) return;
+    const team = court.teams.find(t => t.teamNum === teamNum);
+    if (!team) return;
+
+    const list = document.getElementById('teammates-list');
+    list.innerHTML = team.players.map(p => `
+      <div class="player-name" style="padding:0.25rem 0">
+        ${esc(p.name)} <span style="color:var(--muted); font-size:0.85rem">${esc(p.clubTeam)}</span>
+      </div>
+    `).join('');
+    document.getElementById('teammates-section').style.display = '';
+  } catch {}
+}
+
+// Break request
+document.getElementById('btn-break-request').addEventListener('click', async () => {
+  await sendBreakRequest(true);
+});
+document.getElementById('btn-break-cancel').addEventListener('click', async () => {
+  await sendBreakRequest(false);
+});
+
+async function sendBreakRequest(request) {
+  try {
+    const res = await fetch('/api/player/' + currentToken + '/break', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request }),
+    });
+    if (!res.ok) {
+      const d = await res.json();
+      showToast(d.error || 'Fehler');
+      return;
+    }
+    showToast(request ? 'Pause angefragt.' : 'Pause abgebrochen.');
+    loadPlayer();
+  } catch (err) {
+    showToast('Fehler: ' + err.message);
+  }
+}
+
+// Leave tournament
+document.getElementById('btn-leave').addEventListener('click', async () => {
+  if (!confirm('Willst du das Turnier wirklich verlassen?')) return;
+  try {
+    await fetch('/api/player/' + currentToken, { method: 'DELETE' });
+    localStorage.removeItem(TOKEN_KEY);
+    window.location.href = '/register';
+  } catch (err) {
+    showToast('Fehler: ' + err.message);
+  }
+});
+
+// Countdown
+function resetCountdown() {
+  clearInterval(pollCountdown);
+  secondsLeft = POLL_MS / 1000;
+  updateCountdownLabel();
+  pollCountdown = setInterval(() => {
+    secondsLeft--;
+    updateCountdownLabel();
+    if (secondsLeft <= 0) {
+      clearInterval(pollCountdown);
+      loadPlayer();
+    }
+  }, 1000);
+}
+
+function updateCountdownLabel() {
+  const el = document.getElementById('next-refresh');
+  if (el) el.textContent = `Aktualisierung in ${secondsLeft}s`;
+}
+
+function show(view) {
+  ['notoken','loading','player'].forEach(v => {
+    document.getElementById('view-' + v).style.display = v === view ? '' : 'none';
+  });
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin – Mixed Turnier</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">🏐 Mixed Turnier – Admin</span>
+  <div class="flex gap-sm">
+    <span id="status-badge" class="badge badge-yellow">–</span>
+    <a href="/" class="btn btn-secondary btn-sm">Anzeigetafel</a>
+    <button class="btn btn-secondary btn-sm" id="btn-logout" style="display:none">Abmelden</button>
+  </div>
+</div>
+
+<!-- Login form -->
+<div id="view-login" class="container" style="max-width:400px; display:none">
+  <div class="card mt-4">
+    <h2>Admin-Login</h2>
+    <form id="login-form" class="mt-3">
+      <div class="form-group">
+        <label for="password">Passwort</label>
+        <input type="password" id="password" name="password" placeholder="Admin-Passwort" required>
+      </div>
+      <div id="login-error" class="alert alert-error mt-2" style="display:none"></div>
+      <button type="submit" class="btn btn-primary mt-2" style="width:100%">Anmelden</button>
+    </form>
+  </div>
+</div>
+
+<!-- Admin dashboard -->
+<div id="view-admin" style="display:none">
+  <div class="container">
+
+    <!-- Tournament controls -->
+    <div class="card mt-3">
+      <h2>Turnier-Steuerung</h2>
+      <div class="flex mt-3 flex-wrap gap-sm">
+        <button class="btn btn-success" id="btn-start" disabled>Turnier starten</button>
+        <button class="btn btn-primary" id="btn-next" disabled>Nächste Runde</button>
+        <button class="btn btn-warn" id="btn-finish" disabled>Turnier beenden</button>
+        <button class="btn btn-danger btn-sm" id="btn-reset">Reset</button>
+      </div>
+      <div id="ctrl-error" class="alert alert-error mt-2" style="display:none"></div>
+    </div>
+
+    <!-- Current round -->
+    <div id="round-section" class="mt-3" style="display:none">
+      <h2>Aktuelle Runde <span id="round-num">–</span></h2>
+      <div id="courts-grid" class="court-grid mt-2"></div>
+      <div id="break-section" class="card mt-2" style="display:none">
+        <h3 style="margin-bottom:0.5rem">Pause</h3>
+        <div id="break-list" class="break-list"></div>
+      </div>
+    </div>
+
+    <!-- Players -->
+    <div class="card mt-3">
+      <div class="flex" style="justify-content:space-between">
+        <h2>Spieler (<span id="player-count">0</span>)</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadAll()">Aktualisieren</button>
+      </div>
+
+      <div style="overflow-x:auto; margin-top:0.75rem">
+        <table class="player-table" id="player-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Verein</th>
+              <th>Pausen</th>
+              <th>Pause-Anfrage</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="player-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Co-play stats -->
+    <div class="card mt-3">
+      <div class="flex" style="justify-content:space-between">
+        <h2>Mitspiel-Statistik</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadStats()">Aktualisieren</button>
+      </div>
+      <div style="overflow-x:auto; margin-top:0.75rem">
+        <table class="player-table" id="stats-table">
+          <thead>
+            <tr>
+              <th>Spieler A</th>
+              <th>Spieler B</th>
+              <th>Anzahl</th>
+              <th>Letzte Runde</th>
+            </tr>
+          </thead>
+          <tbody id="stats-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let adminPassword = localStorage.getItem('admin_password') || '';
+
+async function init() {
+  if (adminPassword) {
+    const ok = await checkAuth();
+    if (ok) {
+      showAdmin();
+      return;
+    }
+    adminPassword = '';
+    localStorage.removeItem('admin_password');
+  }
+  show('login');
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch('/admin/api/state', {
+      headers: { 'x-admin-password': adminPassword },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw = document.getElementById('password').value;
+  const errEl = document.getElementById('login-error');
+  errEl.style.display = 'none';
+
+  const res = await fetch('/admin/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    errEl.textContent = data.error || 'Falsches Passwort.';
+    errEl.style.display = '';
+    return;
+  }
+  adminPassword = pw;
+  localStorage.setItem('admin_password', pw);
+  showAdmin();
+});
+
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  await fetch('/admin/api/logout', { method: 'POST' });
+  adminPassword = '';
+  localStorage.removeItem('admin_password');
+  show('login');
+});
+
+function showAdmin() {
+  show('admin');
+  document.getElementById('btn-logout').style.display = '';
+  loadAll();
+}
+
+async function loadAll() {
+  await Promise.all([loadState(), loadPlayers()]);
+}
+
+async function loadState() {
+  try {
+    const res = await fetchAdmin('/admin/api/state');
+    const data = await res.json();
+    renderState(data);
+  } catch (err) {
+    showToast('Fehler: ' + err.message);
+  }
+}
+
+async function loadPlayers() {
+  try {
+    const res = await fetchAdmin('/admin/api/players');
+    const data = await res.json();
+    renderPlayers(data.players);
+  } catch (err) {
+    showToast('Fehler: ' + err.message);
+  }
+}
+
+async function loadStats() {
+  try {
+    const res = await fetchAdmin('/admin/api/stats');
+    const data = await res.json();
+    renderStats(data.coPlayStats);
+  } catch (err) {
+    showToast('Fehler: ' + err.message);
+  }
+}
+
+function renderState(data) {
+  const { state, round } = data;
+  const badge = document.getElementById('status-badge');
+  const statusLabels = { waiting: 'Warten', active: 'Aktiv', finished: 'Beendet' };
+  const statusClasses = { waiting: 'badge-yellow', active: 'badge-green', finished: 'badge-red' };
+
+  badge.textContent = statusLabels[state.status] || state.status;
+  badge.className = 'badge ' + (statusClasses[state.status] || 'badge-blue');
+
+  document.getElementById('btn-start').disabled  = state.status !== 'waiting';
+  document.getElementById('btn-next').disabled   = state.status !== 'active';
+  document.getElementById('btn-finish').disabled = state.status !== 'active';
+
+  const roundSection = document.getElementById('round-section');
+  if (round) {
+    roundSection.style.display = '';
+    document.getElementById('round-num').textContent = round.roundNum;
+    renderCourts(round);
+  } else {
+    roundSection.style.display = 'none';
+  }
+}
+
+function renderCourts(round) {
+  const grid = document.getElementById('courts-grid');
+  grid.innerHTML = round.courts.map(court => `
+    <div class="court-card">
+      <div class="court-header">Feld ${court.courtNum}</div>
+      <div class="court-body">
+        <div class="team-block">
+          <h4>Team ${court.teams[0]?.teamNum ?? ''}</h4>
+          ${(court.teams[0]?.players ?? []).map(p => `<div class="player-name">${esc(p.name)}</div>`).join('')}
+        </div>
+        <div class="vs-divider">VS</div>
+        <div class="team-block team-right">
+          <h4>Team ${court.teams[1]?.teamNum ?? ''}</h4>
+          ${(court.teams[1]?.players ?? []).map(p => `<div class="player-name">${esc(p.name)}</div>`).join('')}
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  const breakSection = document.getElementById('break-section');
+  const breakList = document.getElementById('break-list');
+  if (round.breaking && round.breaking.length > 0) {
+    breakSection.style.display = '';
+    breakList.innerHTML = round.breaking.map(p =>
+      `<span class="break-chip">${esc(p.name)}${p.voluntary ? ' (freiwillig)' : ''}</span>`
+    ).join('');
+  } else {
+    breakSection.style.display = 'none';
+  }
+}
+
+function renderPlayers(players) {
+  document.getElementById('player-count').textContent = players.filter(p => p.active).length;
+  const tbody = document.getElementById('player-tbody');
+  tbody.innerHTML = players.map(p => {
+    let statusBadge;
+    if (!p.active) {
+      statusBadge = '<span class="badge badge-red">Weg</span>';
+    } else if (p.paused) {
+      statusBadge = '<span class="badge badge-yellow">Pausiert</span>';
+    } else {
+      statusBadge = '<span class="badge badge-green">Aktiv</span>';
+    }
+    const pauseBtn = p.active && !p.paused
+      ? `<button class="btn btn-warn btn-sm" onclick="pausePlayer(${p.id})">Pausieren</button>`
+      : '';
+    const unpauseBtn = p.active && p.paused
+      ? `<button class="btn btn-success btn-sm" onclick="unpausePlayer(${p.id})">Fortsetzen</button>`
+      : '';
+    const removeBtn = p.active
+      ? `<button class="btn btn-danger btn-sm" onclick="removePlayer(${p.id})">Entfernen</button>`
+      : '';
+    return `
+    <tr class="${p.active ? '' : 'inactive'}">
+      <td>${esc(p.name)}</td>
+      <td>${esc(p.clubTeam)}</td>
+      <td>${p.totalBreaks}</td>
+      <td>${p.hasBreakRequest ? '<span class="badge badge-yellow">Pause</span>' : '–'}</td>
+      <td>${statusBadge}</td>
+      <td class="flex gap-sm" style="flex-wrap:wrap">
+        ${pauseBtn}${unpauseBtn}${removeBtn}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderStats(stats) {
+  const tbody = document.getElementById('stats-tbody');
+  if (!stats || stats.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted)">Noch keine Statistiken</td></tr>';
+    return;
+  }
+  tbody.innerHTML = stats.map(s => `
+    <tr>
+      <td>${esc(s.playerA)}</td>
+      <td>${esc(s.playerB)}</td>
+      <td>
+        <span class="badge ${s.count >= 4 ? 'badge-red' : s.count >= 3 ? 'badge-yellow' : 'badge-blue'}">
+          ${s.count}×
+        </span>
+      </td>
+      <td>${s.lastRound}</td>
+    </tr>
+  `).join('');
+}
+
+// Tournament controls
+document.getElementById('btn-start').addEventListener('click', () => tournamentAction('start'));
+document.getElementById('btn-next').addEventListener('click', () => tournamentAction('next'));
+document.getElementById('btn-finish').addEventListener('click', () => tournamentAction('finish'));
+document.getElementById('btn-reset').addEventListener('click', async () => {
+  if (!confirm('Wirklich alles zurücksetzen? Alle Daten werden gelöscht!')) return;
+  await tournamentAction('reset');
+});
+
+async function tournamentAction(action) {
+  const errEl = document.getElementById('ctrl-error');
+  errEl.style.display = 'none';
+  try {
+    const res = await fetchAdmin('/admin/api/tournament/' + action, 'POST');
+    const data = await res.json();
+    if (!res.ok) {
+      errEl.textContent = data.error || 'Fehler';
+      errEl.style.display = '';
+      return;
+    }
+    showToast('Aktion erfolgreich: ' + action);
+    await loadAll();
+    await loadStats();
+  } catch (err) {
+    errEl.textContent = 'Fehler: ' + err.message;
+    errEl.style.display = '';
+  }
+}
+
+async function removePlayer(id) {
+  if (!confirm('Spieler wirklich entfernen?')) return;
+  const res = await fetchAdmin('/admin/api/players/' + id, 'DELETE');
+  if (res.ok) {
+    showToast('Spieler entfernt.');
+    await loadPlayers();
+  }
+}
+
+async function pausePlayer(id) {
+  const res = await fetchAdmin('/admin/api/players/' + id + '/pause', 'POST');
+  if (res.ok) {
+    showToast('Spieler pausiert.');
+    await loadPlayers();
+  } else {
+    const data = await res.json();
+    showToast('Fehler: ' + (data.error || 'Unbekannt'));
+  }
+}
+
+async function unpausePlayer(id) {
+  const res = await fetchAdmin('/admin/api/players/' + id + '/unpause', 'POST');
+  if (res.ok) {
+    showToast('Spieler wieder aktiv.');
+    await loadPlayers();
+  } else {
+    const data = await res.json();
+    showToast('Fehler: ' + (data.error || 'Unbekannt'));
+  }
+}
+
+function fetchAdmin(url, method = 'GET') {
+  return fetch(url, {
+    method,
+    headers: { 'x-admin-password': adminPassword },
+  });
+}
+
+function show(view) {
+  document.getElementById('view-login').style.display = view === 'login' ? '' : 'none';
+  document.getElementById('view-admin').style.display = view === 'admin' ? '' : 'none';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+init();
+</script>
+</body>
+</html>

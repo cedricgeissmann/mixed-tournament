@@ -1,0 +1,17 @@
+{
+  "name": "mixed-tournament",
+  "version": "1.0.0",
+  "description": "Internal mixed volleyball tournament manager",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "qrcode": "^1.5.3",
+    "uuid": "^9.0.1"
+  }
+}

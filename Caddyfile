@@ -1,0 +1,4 @@
+# Ersetze "deine-domain.de" mit deiner tatsaechlichen Domain
+{$DOMAIN:trainingstool.me} {
+    reverse_proxy tournament:3000
+}
